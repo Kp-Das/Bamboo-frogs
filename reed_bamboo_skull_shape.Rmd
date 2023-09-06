@@ -1,0 +1,114 @@
+---
+title: "Bamboo frog skull evolution"
+output:
+  pdf_document: default
+  html_document: default
+date: "2023-08-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning = FALSE}
+#Read in the libraries
+require(geomorph)
+require(phytools)
+require(ape)
+require(geiger)
+require(ggplot2)
+require(plyr)
+require(crayon)
+require(dispRity)
+#Importing volume files and placing landmarks on 55 species of bush frogs 
+#R_graminirupes_CESF044_CESF066<- read.ply ("R_graminirupes_CESF044_CESF066.ply") #1
+#R_graminirupes_CESF044_CESF066.nts <- digit.fixed(R_graminirupes_CESF044_CESF066, fixed = 36, index = F, ptsize=4, center = T) #selecting landmark, its not necessary to assign the file name
+
+#Compiling above generated landmark files
+filelist<- list.files(pattern ="nts")
+mydata<- readmulti.nts(filelist)
+dimnames(mydata)[[3]] <- gsub (".nts", "", filelist) #creates a nts file with all files
+dimnames(mydata)
+#reading the tree data
+tree<- read.nexus("102TAX_PRIOR4BD_R1R2_timmed_65lineages_NAMESUPDATED.nex") #reading the phylogenetic tree
+tmp <- name.check(tree, two.d.array(mydata))
+mytree<- drop.tip (tree, tip= tmp$tree_not_data) #phylogenetic tree pruned with shape data
+
+#reading the classifier file
+classifier<- read.csv2 ("Bush_frogs_classifer.csv", header = T, row.names = 1) #classifier sorted according to pca data
+gpf_r <- classifier$R_NR #reed bamboo and non reed bamboo habitat
+gpf <- as.factor(classifier$R_NR)
+gpf_a<- c(22,23,24)[as.factor(classifier$a_b)]
+
+#Running generalized Procrustes analysis and PCA on compiled landmark files
+y.gpa<- gpagen(mydata) #gpa 
+PCA <- gm.prcomp(y.gpa$coords)
+PCA.plot<- plot(PCA, main = "PCA")
+
+
+scores<- as.data.frame(PCA$x)
+PC1 <- scores$Comp1
+PC2 <- scores$Comp2
+df<-scores
+PCA.w.phylo <- gm.prcomp(y.gpa$coords, phy = mytree)
+phy<-plot(PCA.w.phylo, phylo = TRUE, main = "PCA.w.phylo", pch=gpf_a, cex = 1, phylo.par=list(tip.labels=FALSE), tip.labels=FALSE, bg=c("#440154", "#fde725")[as.numeric(gpf)])
+chulls_R_NR_pc <- ddply(scores, .(gpf_r), function(df) df[chull(df$Comp1, df$Comp2),])
+plot_R_NR_pc <-make_ggplot(phy)+geom_polygon(data=chulls_R_NR_pc, aes(x= Comp1, y= Comp2, fill=gpf_r),alpha=0.5) + scale_color_manual(values = c("#440154", "#fde725")) + scale_fill_manual(values = c("#440154", "#fde725"))
+mytheme_white<-theme(axis.line = element_line(size = 0.5, colour = "black"),panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_rect(fill = "#ffffff"))
+plot_R_NR_pc + mytheme_white
+
+#PGLS analysis
+gdf <- geomorph.data.frame(y.gpa, eco = gpf_r, phy=mytree)
+reed.pgls <- procD.pgls(coords ~ log(Csize)*eco, phy = phy, data = gdf, iter = 999,print.progress = FALSE)
+summary(reed.pgls)
+
+#disparity analysis
+cyp_phy <- read.nexus("102TAX_PRIOR4BD_R1R2_timmed_65lineages_NAMESUPDATED.nex")
+cyp_dat <- classifier
+cyp_td <- treedata(cyp_phy,cyp_dat)
+gp_R_NR <- data.frame(cyp_td$data[,"R_NR"])
+mycol_R_NR <- c("#440154", "#fde725")
+procrustes<- gpagen(mydata) 
+data<- geomorph.ordination(procrustes)
+subset<- custom.subsets(data,group = gp_R_NR)
+bootstraps<- boot.matrix(subset)
+disparity_data_R_NR2 <- dispRity(bootstraps,metric=c(sum,variances))
+test2<- test.dispRity(disparity_data_R_NR2, test = wilcox.test)
+plot(disparity_data_R_NR2, col=mycol_R_NR,xlab= "Clades", ylab = "disparity", main= "Disparity between Non Bamboo & Bamboo bush frogs" )
+```
+RRphylo analysis
+
+```{r,warning = FALSE}
+require(geiger)
+require(geomorph)
+require(RRphylo)
+require(ddpcr)
+tree<- read.nexus("102TAX_PRIOR4BD_R1R2_timmed_65lineages_NAMESUPDATED.nex")
+data <- read.csv2("Bush_frogs_classifer.csv", header = T,row.names=1)
+pc <- read.csv2("pc_all.csv",header = T,row.names=1)
+reeddata<- treedata(tree,data)
+rrpc<- pc 
+rrtree<- reeddata$phy
+rrd <- RRphylo(tree=rrtree,y=pc) #creating an RRphylo object
+shift <- search.shift(rrd, status.type = c("clade"),node = NULL, state  = NULL, cov = NULL, nrep = 1000, f = 3)
+plot <- plotShift(rrd,shift,state=NULL)
+plot$plotClades(tree.args = NULL, symbols.args = NULL)
+plot$plotClades(tree.args=list(no.margin=TRUE, type= 'fan', show.tip.label= "FALSE"),
+                  symbols.args=list(lwd=2,fg=NA,bg=scales::alpha(c("#5ec962","#21918c", "#fde725"),0.8)))
+
+overfit<- overfitRR(RR=rrd,y=pc,swap.args =list(si=0.2,si2=0.2),
+          shift.args = list(node=rownames(shift$single.clades)),
+          nsim=100,clus=0)
+#plotrates
+rrdc <- RRphylo(tree=rrtree,y=pc)
+pr<-plotRates(rrdc,node=60)
+pr_all<- plotRates(rrd, node = c(60,80))
+pr_och <- plotRates(rrd, node = 60)
+rt<- plotRates(rrd, node =80,60)
+rt$plotLollipop()
+pr$plotHist(hist.args=list(yaxt="n",ylab=NULL,col1="#4c4c4c",col2="#fde725"),legend.args=list(x="topright"))
+pr_all$plotLollipop(lollipop.args = list(col="#fde725",pt.col="#455153",bg= "#455153",pt.lwd=2,cex=2,lwd=2),line.args = list(col="#770007",lwd=2))
+pr_och$plotLollipop(lollipop.args = list(col="#fde725",pt.col="#455153",bg= "#455153",pt.lwd=2,cex=2,lwd=2),line.args = list(col="#770007",lwd=2))
+
+```
